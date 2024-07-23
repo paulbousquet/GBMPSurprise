@@ -114,14 +114,16 @@ local sets gRGDP gPGDP UNEMP HSTART gIP gRGOVF
         */      if gbYQ >  gbYQ[_n-1]
 
         /* forecast */ 
-        forvalues hh=0/8 {
+        forvalues hh=0/9 {
             local hh1 = `hh' + 1
             gen      D`vv'F`hh' = /*
             */       `vv'F`hh' - `vv'F`hh'[_n-1]  /* 
             */       if gbYQ == gbYQ[_n-1]
-            replace  D`vv'F`hh' = /*
+			if (`hh'<9) {
+				     replace  D`vv'F`hh' = /*
             */       `vv'F`hh' - `vv'F`hh1'[_n-1] /*
             */       if gbYQ >  gbYQ[_n-1]
+			}
         }
     }
 	
@@ -141,7 +143,7 @@ drop gb*
 
 order FOMCdate GBdate DATE DFFR LFFR g* Dg* U* DU* H* DH* 
 
-keep FOMCdate-DHSTARTF8
+keep FOMCdate-DHSTARTF9
 
 export delimited using "GBdata.csv", replace
 

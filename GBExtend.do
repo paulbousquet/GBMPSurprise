@@ -1,12 +1,15 @@
 /******************************************************************************/
 /* Code to replicate and update Romer and Romer (2004) shocks                 */
 /*                                                                            */
-/* By: Miguel Acosta                                                          */
+/* By: Miguel Acosta (amended to just construct forecast data by Paul Bousquet)                                                          */
 /******************************************************************************/
 
 /******************************************************************************/ 
 /* Preliminaries                                                              */ 
 /******************************************************************************/ 
+
+ssc install nmissing 
+
 /* Update Fed-Funds target from FRED again? */ 
 local reloadFFR 0
 
@@ -61,7 +64,7 @@ gen fomc   = date(FOMCdate,"YMD")
 
 // AD forecast inclusions 
 
-local sets gRGDP gPGDP UNEMP HSTART gIP gRGOVF
+local sets gRGDP gPGDP UNEMP gPCPI gPCPIX gPPCE gPPCEX gRPCE gRBF gRRES gRGOVF gRGOVSL gNGDP HSTART gIP
 
 /* Merge on each sheet */ 
 foreach sheet of local sets {
@@ -102,25 +105,24 @@ replace FFR = OLDTARG + DTARG if !missing(OLDTARG)
 replace DFFR = DTARG if !missing(DTARG)
 replace LFFR = OLDTARG if !missing(OLDTARG)
 
-local sets gRGDP gPGDP UNEMP HSTART gIP gRGOVF
 /******************************************************************************/
 /* create forecast revisions                                                  */
 /******************************************************************************/
     foreach vv of local sets {
         /* back-cast */ 
-        gen     D`vv'B1 = `vv'B1 - `vv'B1[_n-1] /*
+       quietly gen     D`vv'B1 = `vv'B1 - `vv'B1[_n-1] /*
         */      if gbYQ == gbYQ[_n-1]
-        replace D`vv'B1 = `vv'B1 - `vv'F0[_n-1] /*
+        quietly replace D`vv'B1 = `vv'B1 - `vv'F0[_n-1] /*
         */      if gbYQ >  gbYQ[_n-1]
 
         /* forecast */ 
-        forvalues hh=0/9 {
+        forvalues hh=0/3 {
             local hh1 = `hh' + 1
-            gen      D`vv'F`hh' = /*
+           quietly gen      D`vv'F`hh' = /*
             */       `vv'F`hh' - `vv'F`hh'[_n-1]  /* 
             */       if gbYQ == gbYQ[_n-1]
 			if (`hh'<9) {
-				     replace  D`vv'F`hh' = /*
+				     quietly replace  D`vv'F`hh' = /*
             */       `vv'F`hh' - `vv'F`hh1'[_n-1] /*
             */       if gbYQ >  gbYQ[_n-1]
 			}
@@ -135,15 +137,24 @@ local sets gRGDP gPGDP UNEMP HSTART gIP gRGOVF
 // Dropping variables we don't need 	
 	
 	forvalues i=2/4 {
-		ds *B`i'
+		quietly ds *B`i' 
 		drop `r(varlist)'
 	}
 	
+	forvalues i=5/9 {
+		quietly ds *F`i' 
+		drop `r(varlist)'
+	}
+		
 drop gb*
 
 order FOMCdate GBdate DATE DFFR LFFR g* Dg* U* DU* H* DH* 
 
-keep FOMCdate-DHSTARTF9
+keep FOMCdate-DHSTARTF3
 
-export delimited using "GBdata.csv", replace
+quietly nmissing, min(1)
+
+quietly drop `r(varlist)'
+
+export delimited using "GGBdata.csv", replace
 

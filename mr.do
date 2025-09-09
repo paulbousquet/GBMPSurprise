@@ -232,7 +232,10 @@ drop if DATE < 1972 | DATE==.
 tempfile gbs
 save `gbs', replace
 
-import delimited "https://raw.githubusercontent.com/paulbousquet/GBMPSurprise/main/jk_source.csv", clear
+//import delimited "https://raw.githubusercontent.com/paulbousquet/GBMPSurprise/main/jk_source.csv", clear
+
+import delimited "C:\Users\pblit\Downloads\jk_source.csv", clear
+
 
 gen mr_fomc = date(fomc_latest, "MDY")
 format mr_fomc %tdDDmonYY
@@ -250,6 +253,8 @@ merge m:1 daten using `gbs', nogenerate
 
 gen mismatch = (quarter(mr_fomc) != quarter(raw_daten) | year(mr_fomc) != year(raw_daten))
 
+replace mismatch = 1 if raw_date == 11298 | raw_date == 11578 | raw_date == 11935 /* */| raw_date == 15235 
+
 local prefixes "gRGDP DgRGDP gPGDP DgPGDP DUNEMP"
 
 * Loop through each prefix and perform rollover
@@ -264,16 +269,52 @@ quietly foreach prefix of local prefixes {
     }
 }
 
+generate unscheduled = strpos(event, "(Unscheduled)") > 0 | strpos(event, "statement") > 0 | strpos(event, "announces") > 0
+
+local prefixes "DgRGDP DgPGDP DUNEMP"
+
+* Loop through each prefix and perform rollover
+quietly foreach prefix of local prefixes {
+    * Get list of variables that start with this prefix
+    ds `prefix'*
+    local varlist `r(varlist)'
+    
+    * Loop through each variable in the list
+    foreach var of local varlist {
+        replace `var' = 0 if unscheduled == 1
+    }
+}
+
 replace gRGDPF3 = gRGDPF4 if mismatch == 1
 replace gPGDPF3 = gPGDPF4 if mismatch == 1
 replace UNEMPF0 = UNEMPF1 if mismatch == 1
 
  gen monthly = mofd(raw_daten)
 format monthly %tm
- 
-drop if monthly <= m(1990m1) | monthly >= m(2020m1) | monthly==.
 
-sort raw_date
+local mr_order gRGDPB1 gRGDPF0 gRGDPF1 gRGDPF2 gRGDPF3 gPGDPB1 gPGDPF0 gPGDPF1 gPGDPF2 gPGDPF3 UNEMPF0 DgRGDPB1 DgRGDPF0 DgRGDPF1 /*
+  */ DgRGDPF2 DgPGDPB1 DgPGDPF0 DgPGDPF1 /*
+  */ DgPGDPF2  DUNEMPB1 DUNEMPF0 DUNEMPF1 DUNEMPF2 
+
+reg ff4_mr `mr_order' if monthly < m(2010m1), r 
+
+  drop if monthly >= m(2020m1) | monthly==. | ff4==.
+  
+  preserve 
+  
+  keep if e(sample)==1
+  sort raw_date 
+  keep ff4_mr `mr_order'
+  order ff4_mr `mr_order'
+export delimited using "regression_sample.csv", replace
+restore
+
+  sort raw_date
+  predict res_rep, residuals 
+
+egen rep_sum = total(res_rep), by(raw_daten)
+ replace rep_sum = . if !e(sample)
+ 
 
 reg ff4 gRGDPB1 gRGDPF0 gRGDPF1 gRGDPF2 gRGDPF3 DgRGDPB1 DgRGDPF0 DgRGDPF1 /*
   */ DgRGDPF2 gPGDPB1 gPGDPF0 gPGDPF1 gPGDPF2 gPGDPF3 DgPGDPB1 DgPGDPF0 DgPGDPF1 /*
@@ -283,26 +324,22 @@ predict res, residuals
 
 egen res_sum = total(res), by(raw_daten)
  replace res_sum = . if !e(sample)
- 
- 
-reg ff4 gRGDPB1 gRGDPF0 gRGDPF1 gRGDPF2 gRGDPF3 DgRGDPB1 DgRGDPF0 DgRGDPF1 /*
-  */ DgRGDPF2 gPGDPB1 gPGDPF0 gPGDPF1 gPGDPF2 gPGDPF3 DgPGDPB1 DgPGDPF0 DgPGDPF1 /*
-  */ DgPGDPF2 UNEMPF0 DUNEMPB1 DUNEMPF0 DUNEMPF1 DUNEMPF2 if monthly < m(2010m1) & monthly >= m(1990m1)
-
-predict res_rep, residuals 
-
-egen rep_sum = total(res_rep), by(raw_daten)
- replace rep_sum = . if !e(sample)
-
 
  collapse (firstnm) monthly res_sum rep_sum, by(raw_daten)
  
 tsset monthly
 
-//tsfill, full 
+tsfill, full 
+
+insobs 1, before(1)
+
+gen t = _n
  
-//replace res_sum = 0 if res_sum == . 
-//replace rep_sum = 0 if rep_sum == . & monthly < m(2010m1)
+tsset t
+ 
+replace res_sum = 0 if res_sum == . 
+replace rep_sum = 0 if rep_sum == . & monthly < m(2010m1)
+replace rep_sum = 0 if t==1
  
 arima res_sum, ar(1/12)
 

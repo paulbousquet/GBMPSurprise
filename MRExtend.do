@@ -1,30 +1,8 @@
 /******************************************************************************/
 /* Code to replicate and update Romer and Romer (2004) shocks                 */
 /*                                                                            */
-/* By: Miguel Acosta (modified by Paul Bousquet )                                                         */
+/* By: Miguel Acosta (modified by Paul Bousquet)                              */
 /******************************************************************************/
-
-/******************************************************************************/
-/* Read in Romer & Romer replication material                                 */
-/******************************************************************************/
-import excel using inputs/RomerandRomerDataAppendix.xls, /*
-  */   first clear sheet("DATA BY MEETING")
-
-/* Clean up dates */ 
-tostring MTGDATE, replace
-replace MTGDATE = "0" + MTGDATE if strlen(MTGDATE)==5
-gen fomc = date(MTGDATE,"MD19Y")
-replace fomc = mdy(2,11,1987) if fomc == mdy(2,12,1987)
-
-/* Convert to numeric */ 
-foreach vv of varlist RESID* GR* IG* {
-    destring `vv', replace force 
-}
-
-
-/* Save for later */
-tempfile RR
-save `RR', replace 
 
 /******************************************************************************/
 /* Load Philadelphia Fed Greenbook dataset                                    */

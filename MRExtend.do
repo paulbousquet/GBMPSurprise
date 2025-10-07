@@ -100,7 +100,7 @@ replace gPGDPF3 = gPGDPF4 if mismatch == 1
 replace UNEMPF0 = UNEMPF1 if mismatch == 1
 
 * Keeping with convention to set revision variables to 0 for unscheduled 
-generate unscheduled = strpos(event, "(Unscheduled)") > 0 | strpos(event, "statement") > 0 | strpos(event, "announces") > 0
+generate unscheduled = strpos(event, "(Unscheduled)") > 0 | strpos(event, "Statement") > 0 | strpos(event, "announces") > 0 | strpos(event, "statement") > 0 | strpos(event, "WSJ") > 0
 
 local prefixes "DgRGDP DgPGDP DUNEMP"
 * Loop through each prefix and perform rollover

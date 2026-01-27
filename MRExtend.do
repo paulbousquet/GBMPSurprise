@@ -1,8 +1,35 @@
 /******************************************************************************/
 /* Code to replicate and update Romer and Romer (2004) shocks                 */
 /*                                                                            */
-/* By: Miguel Acosta (modified by Paul Bousquet)                              */
+/* By: Miguel Acosta (modified by Paul Bousquet )                                                         */
 /******************************************************************************/
+
+/******************************************************************************/ 
+/* Preliminaries                                                              */ 
+/******************************************************************************/ 
+/* Update Fed-Funds target from FRED again? */ 
+
+/******************************************************************************/
+/* Read in Romer & Romer replication material                                 */
+/******************************************************************************/
+import excel using inputs/RomerandRomerDataAppendix.xls, /*
+  */   first clear sheet("DATA BY MEETING")
+
+/* Clean up dates */ 
+tostring MTGDATE, replace
+replace MTGDATE = "0" + MTGDATE if strlen(MTGDATE)==5
+gen fomc = date(MTGDATE,"MD19Y")
+replace fomc = mdy(2,11,1987) if fomc == mdy(2,12,1987)
+
+/* Convert to numeric */ 
+foreach vv of varlist RESID* GR* IG* {
+    destring `vv', replace force 
+}
+
+
+/* Save for later */
+tempfile RR
+save `RR', replace 
 
 /******************************************************************************/
 /* Load Philadelphia Fed Greenbook dataset                                    */
@@ -60,7 +87,7 @@ drop if DATE < 1972 | DATE==.
 tempfile gbs
 save `gbs', replace
 
-import delimited "https://raw.githubusercontent.com/paulbousquet/GBMPSurprise/main/jk_source.csv", clear
+import delimited "https://raw.githubusercontent.com/paulbousquet/GBMPSurprise/main/jk_source_old.csv", clear
 
 gen mr_fomc = date(fomc_latest, "MDY")
 format mr_fomc %tdDDmonYY
@@ -100,7 +127,6 @@ replace gPGDPF3 = gPGDPF4 if mismatch == 1
 replace UNEMPF0 = UNEMPF1 if mismatch == 1
 
 * Keeping with convention to set revision variables to 0 for unscheduled 
-generate unscheduled = strpos(event, "(Unscheduled)") > 0 | strpos(event, "Statement") > 0 | strpos(event, "announces") > 0 | strpos(event, "statement") > 0 | strpos(event, "WSJ") > 0
 
 local prefixes "DgRGDP DgPGDP DUNEMP"
 * Loop through each prefix and perform rollover

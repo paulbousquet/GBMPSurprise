@@ -6,7 +6,7 @@ This repo builds on Miguel Acosta's [replication code](https://github.com/miguel
   * `mr_new` is the updated shock series with a tweak in how autocorrelation is handled
   * `mr_rep` is a replication of the original series. Correlation is .998; the replication files discuss some potential reasons for differences
   * `mr_ext` is the extended series with the original treatment for autocorrelation 
-* `GBExtend.do` replicates the expanded series of forecasts used in the construction of the monetary shock series of [Aruoba and Drechsel (2025)](https://econweb.umd.edu/~drechsel/papers/Aruoba_Drechsel.pdf). 
+* `GBExtend.do` replicates the expanded series of forecasts used in the construction of the monetary shock series of [Aruoba and Drechsel (2026)](https://econweb.umd.edu/~drechsel/papers/Aruoba_Drechsel.pdf). 
 
 ## A Note on Data Construction 
 

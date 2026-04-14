@@ -15,4 +15,5 @@ The data in this repo represents a combination of various sources. I expect the 
 * 11/25/2008 and 12/1/2008 are added from GFC
 * 10/04/2019 is replaced with 10/11/2019
 * Some 2020 (COVID) dates have been deleted (everything in March after 3/15 and 8/27)
-* 6/13/2022 was added -- a Nick Timiaros article led to a more potent "surprise" than the actual press conference. 
+* 6/13/2022 was added -- a Nick Timiaros article led to a more potent "surprise" than the actual press conference.
+* MP1 and MP2 can be distorted due to scaling. If no meeting is taking place next month, MP1 is set to FF2. If the relevant contracts for MP1 and MP2 are very small, the scaling can amplify a "non-movement" into something nontrivial. I check the USMPD against Jarocinski's data and zero out a few instances where this is a problem. They use slighly different windows, but these windows having negligible magnitudes on either side of the real line is treated as indistinguishable from noise (and is set to zero). These only occurr on days where the target did not move. 

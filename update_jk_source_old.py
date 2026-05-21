@@ -17,6 +17,7 @@ import openpyxl
 DEFAULT_USMPD_URL = "https://www.frbsf.org/wp-content/uploads/USMPD.xlsx"
 DEFAULT_CALENDAR_URL = "https://www.federalreserve.gov/monetarypolicy/fomccalendars.htm"
 USER_AGENT = "Mozilla/5.0"
+UTF8_BOM = b"\xef\xbb\xbf"
 
 CSV_HEADERS = [
     "Date",
@@ -145,6 +146,7 @@ def parse_args() -> argparse.Namespace:
         )
     )
     parser.add_argument("--csv", type=Path, default=repo_dir / "jk_source_old.csv")
+    parser.add_argument("--monthly", type=Path, default=repo_dir / "monthly.csv")
     parser.add_argument("--sheet", default="Monetary Events")
     parser.add_argument("--usmpd-url", default=DEFAULT_USMPD_URL)
     parser.add_argument("--calendar-url", default=DEFAULT_CALENDAR_URL)
@@ -441,6 +443,98 @@ def schedule_years_to_seed(previous_real_date: date, new_real_dates: list[date])
     return list(range(previous_real_date.year + 2, latest_new_real_year + 2))
 
 
+def sync_to_monthly(
+    monthly_path: Path,
+    jk_rows: list[dict[str, str]],
+    changed_dates: list[str],
+    dry_run: bool,
+) -> tuple[list[str], list[str]]:
+    """Mirror every jk_source_old.csv meeting changed this run into monthly.csv.
+
+    `changed_dates` is the full set of meetings the run appended to or
+    refreshed in jk_source_old.csv. The caller already knows them, so
+    nothing is re-derived here -- each one is reflected in monthly.csv:
+
+      * a meeting whose month is missing becomes a new monthly row,
+      * a meeting whose month is present has its shared columns refreshed
+        in place (so new jk data always reaches monthly).
+
+    Every changed meeting is dated after jk_source_old.csv's real-data
+    edge, so this only touches monthly rows the pipeline itself manages --
+    the historical baseline is never rewritten. Rows that did not change
+    are preserved byte-for-byte.
+
+    Returns (appended_dates, refreshed_dates).
+    """
+    if not changed_dates:
+        return [], []
+    if not monthly_path.exists():
+        print(f"Skipped monthly update: {monthly_path} not found.")
+        return [], []
+
+    raw = monthly_path.read_bytes()
+    has_bom = raw.startswith(UTF8_BOM)
+    text = (raw[len(UTF8_BOM):] if has_bom else raw).decode("utf-8")
+    newline = "\r\n" if "\r\n" in text else "\n"
+    lines = text.split(newline)
+    if lines and lines[-1] == "":
+        lines = lines[:-1]
+    if not lines:
+        raise ValueError(f"{monthly_path} has no header row")
+
+    header = next(csv.reader([lines[0]]))
+    shared = [column for column in header if column in CSV_HEADERS and column != "Date"]
+    date_index = header.index("Date")
+    row_by_date = {parse_mdy(row["Date"]): row for row in jk_rows}
+
+    # Locate the existing monthly row (if any) for each calendar month.
+    line_by_month: dict[tuple[int, int], int] = {}
+    for index in range(1, len(lines)):
+        existing = parse_mdy(next(csv.reader([lines[index]]))[date_index])
+        line_by_month[(existing.year, existing.month)] = index
+
+    def serialize(values: list[str]) -> str:
+        buffer = io.StringIO()
+        csv.writer(buffer, lineterminator="").writerow(values)
+        return buffer.getvalue()
+
+    appended_lines: list[str] = []
+    appended: list[str] = []
+    refreshed: list[str] = []
+    for meeting in sorted({parse_mdy(value) for value in changed_dates}):
+        jk_row = row_by_date.get(meeting)
+        if jk_row is None:
+            continue
+        month_key = (meeting.year, meeting.month)
+        first_of_month = format_mdy(date(meeting.year, meeting.month, 1))
+
+        if month_key in line_by_month:
+            index = line_by_month[month_key]
+            record = dict(zip(header, next(csv.reader([lines[index]]))))
+        else:
+            record = {column: "" for column in header}
+
+        for column in shared:
+            record[column] = jk_row.get(column, "") or ""
+        record["Date"] = first_of_month
+        record["mainstr"] = format_mdy(meeting)
+        serialized = serialize([record[column] for column in header])
+
+        if month_key in line_by_month:
+            lines[line_by_month[month_key]] = serialized
+            refreshed.append(first_of_month)
+        else:
+            appended_lines.append(serialized)
+            appended.append(first_of_month)
+
+    if not dry_run:
+        out_text = newline.join(lines + appended_lines) + newline
+        monthly_path.write_bytes(
+            (UTF8_BOM if has_bom else b"") + out_text.encode("utf-8")
+        )
+    return appended, refreshed
+
+
 def main() -> int:
     args = parse_args()
     csv_path = args.csv.resolve()
@@ -494,6 +588,22 @@ def main() -> int:
                 f"Would replace MP1 with FF2 in {len(mp1_ff2_dates)} row(s): "
                 f"{', '.join(mp1_ff2_dates)}"
             )
+        monthly_appended, monthly_refreshed = sync_to_monthly(
+            args.monthly,
+            rows,
+            usmpd_appended + usmpd_refreshed + schedule_appended + schedule_refreshed,
+            dry_run=True,
+        )
+        if monthly_appended:
+            print(
+                f"Would append {len(monthly_appended)} row(s) to "
+                f"{args.monthly.name}: {', '.join(monthly_appended)}"
+            )
+        if monthly_refreshed:
+            print(
+                f"Would refresh {len(monthly_refreshed)} row(s) in "
+                f"{args.monthly.name}: {', '.join(monthly_refreshed)}"
+            )
         return 0
 
     write_csv_rows(csv_path, fieldnames, rows)
@@ -522,6 +632,23 @@ def main() -> int:
         print(
             f"Replaced MP1 with FF2 in {len(mp1_ff2_dates)} row(s): "
             f"{', '.join(mp1_ff2_dates)}"
+        )
+
+    monthly_appended, monthly_refreshed = sync_to_monthly(
+        args.monthly,
+        rows,
+        usmpd_appended + usmpd_refreshed + schedule_appended + schedule_refreshed,
+        dry_run=False,
+    )
+    if monthly_appended:
+        print(
+            f"Appended {len(monthly_appended)} row(s) to {args.monthly.name}: "
+            f"{', '.join(monthly_appended)}"
+        )
+    if monthly_refreshed:
+        print(
+            f"Refreshed {len(monthly_refreshed)} row(s) in {args.monthly.name}: "
+            f"{', '.join(monthly_refreshed)}"
         )
 
     return 0

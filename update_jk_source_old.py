@@ -19,6 +19,10 @@ DEFAULT_CALENDAR_URL = "https://www.federalreserve.gov/monetarypolicy/fomccalend
 USER_AGENT = "Mozilla/5.0"
 UTF8_BOM = b"\xef\xbb\xbf"
 
+# monthly.csv: rows before this year are the frozen historical baseline;
+# this year onward is regenerated from jk_source_old.csv on every run.
+MONTHLY_PIPELINE_START_YEAR = 2026
+
 CSV_HEADERS = [
     "Date",
     "Unscheduled",
@@ -443,34 +447,29 @@ def schedule_years_to_seed(previous_real_date: date, new_real_dates: list[date])
     return list(range(previous_real_date.year + 2, latest_new_real_year + 2))
 
 
-def sync_to_monthly(
+def update_monthly_panel(
     monthly_path: Path,
     jk_rows: list[dict[str, str]],
-    changed_dates: list[str],
     dry_run: bool,
-) -> tuple[list[str], list[str]]:
-    """Mirror every jk_source_old.csv meeting changed this run into monthly.csv.
+) -> tuple[int, str, str]:
+    """Rebuild monthly.csv's pipeline section from jk_source_old.csv.
 
-    `changed_dates` is the full set of meetings the run appended to or
-    refreshed in jk_source_old.csv. The caller already knows them, so
-    nothing is re-derived here -- each one is reflected in monthly.csv:
+    Rows before MONTHLY_PIPELINE_START_YEAR are the frozen historical
+    baseline and are kept byte-for-byte. Every month from that year
+    through December of jk_source_old.csv's last year is regenerated as a
+    gap-free monthly panel:
 
-      * a meeting whose month is missing becomes a new monthly row,
-      * a meeting whose month is present has its shared columns refreshed
-        in place (so new jk data always reaches monthly).
+      * a month with an FOMC meeting -> possible=1, multsch=0, plus the
+        columns shared with jk_source_old.csv copied across,
+      * a month with no meeting      -> possible=0, multsch=0, blank data.
 
-    Every changed meeting is dated after jk_source_old.csv's real-data
-    edge, so this only touches monthly rows the pipeline itself manages --
-    the historical baseline is never rewritten. Rows that did not change
-    are preserved byte-for-byte.
-
-    Returns (appended_dates, refreshed_dates).
+    Regenerating the whole section (instead of diffing) keeps it gap-free
+    and guarantees new jk data always reaches monthly.csv. Returns
+    (row_count, first_month, last_month).
     """
-    if not changed_dates:
-        return [], []
     if not monthly_path.exists():
         print(f"Skipped monthly update: {monthly_path} not found.")
-        return [], []
+        return 0, "", ""
 
     raw = monthly_path.read_bytes()
     has_bom = raw.startswith(UTF8_BOM)
@@ -484,55 +483,58 @@ def sync_to_monthly(
 
     header = next(csv.reader([lines[0]]))
     shared = [column for column in header if column in CSV_HEADERS and column != "Date"]
-    date_index = header.index("Date")
-    row_by_date = {parse_mdy(row["Date"]): row for row in jk_rows}
 
-    # Locate the existing monthly row (if any) for each calendar month.
-    line_by_month: dict[tuple[int, int], int] = {}
-    for index in range(1, len(lines)):
-        existing = parse_mdy(next(csv.reader([lines[index]]))[date_index])
-        line_by_month[(existing.year, existing.month)] = index
+    # Keep every frozen baseline row (before the pipeline year) byte-for-byte.
+    baseline_lines: list[str] = []
+    for line in lines[1:]:
+        if not line:
+            continue
+        if parse_mdy(next(csv.reader([line]))[0]).year < MONTHLY_PIPELINE_START_YEAR:
+            baseline_lines.append(line)
+
+    # Index jk_source meetings by (year, month) for the pipeline section.
+    jk_by_month: dict[tuple[int, int], dict[str, str]] = {}
+    last_year = MONTHLY_PIPELINE_START_YEAR - 1
+    for jk_row in jk_rows:
+        meeting = parse_mdy(jk_row["Date"])
+        last_year = max(last_year, meeting.year)
+        if meeting.year >= MONTHLY_PIPELINE_START_YEAR:
+            jk_by_month[(meeting.year, meeting.month)] = jk_row
 
     def serialize(values: list[str]) -> str:
         buffer = io.StringIO()
         csv.writer(buffer, lineterminator="").writerow(values)
         return buffer.getvalue()
 
-    appended_lines: list[str] = []
-    appended: list[str] = []
-    refreshed: list[str] = []
-    for meeting in sorted({parse_mdy(value) for value in changed_dates}):
-        jk_row = row_by_date.get(meeting)
+    # Regenerate every month from the pipeline year through December of the
+    # last year jk_source_old.csv covers.
+    generated: list[str] = []
+    months: list[str] = []
+    year, month = MONTHLY_PIPELINE_START_YEAR, 1
+    while (year, month) <= (last_year, 12):
+        record = {column: "" for column in header}
+        record["Date"] = format_mdy(date(year, month, 1))
+        record["multsch"] = "0"
+        jk_row = jk_by_month.get((year, month))
         if jk_row is None:
-            continue
-        month_key = (meeting.year, meeting.month)
-        first_of_month = format_mdy(date(meeting.year, meeting.month, 1))
-
-        if month_key in line_by_month:
-            index = line_by_month[month_key]
-            record = dict(zip(header, next(csv.reader([lines[index]]))))
+            record["possible"] = "0"
         else:
-            record = {column: "" for column in header}
-
-        for column in shared:
-            record[column] = jk_row.get(column, "") or ""
-        record["Date"] = first_of_month
-        record["mainstr"] = format_mdy(meeting)
-        serialized = serialize([record[column] for column in header])
-
-        if month_key in line_by_month:
-            lines[line_by_month[month_key]] = serialized
-            refreshed.append(first_of_month)
-        else:
-            appended_lines.append(serialized)
-            appended.append(first_of_month)
+            record["possible"] = "1"
+            for column in shared:
+                record[column] = jk_row.get(column, "") or ""
+            record["mainstr"] = format_mdy(parse_mdy(jk_row["Date"]))
+        generated.append(serialize([record[column] for column in header]))
+        months.append(record["Date"])
+        year, month = (year + 1, 1) if month == 12 else (year, month + 1)
 
     if not dry_run:
-        out_text = newline.join(lines + appended_lines) + newline
+        out_text = newline.join([lines[0]] + baseline_lines + generated) + newline
         monthly_path.write_bytes(
             (UTF8_BOM if has_bom else b"") + out_text.encode("utf-8")
         )
-    return appended, refreshed
+
+    first, last = (months[0], months[-1]) if months else ("", "")
+    return len(generated), first, last
 
 
 def main() -> int:
@@ -588,21 +590,13 @@ def main() -> int:
                 f"Would replace MP1 with FF2 in {len(mp1_ff2_dates)} row(s): "
                 f"{', '.join(mp1_ff2_dates)}"
             )
-        monthly_appended, monthly_refreshed = sync_to_monthly(
-            args.monthly,
-            rows,
-            usmpd_appended + usmpd_refreshed + schedule_appended + schedule_refreshed,
-            dry_run=True,
+        monthly_count, monthly_first, monthly_last = update_monthly_panel(
+            args.monthly, rows, dry_run=True
         )
-        if monthly_appended:
+        if monthly_count:
             print(
-                f"Would append {len(monthly_appended)} row(s) to "
-                f"{args.monthly.name}: {', '.join(monthly_appended)}"
-            )
-        if monthly_refreshed:
-            print(
-                f"Would refresh {len(monthly_refreshed)} row(s) in "
-                f"{args.monthly.name}: {', '.join(monthly_refreshed)}"
+                f"Would rebuild {monthly_count} pipeline row(s) in "
+                f"{args.monthly.name} ({monthly_first} .. {monthly_last})"
             )
         return 0
 
@@ -634,21 +628,13 @@ def main() -> int:
             f"{', '.join(mp1_ff2_dates)}"
         )
 
-    monthly_appended, monthly_refreshed = sync_to_monthly(
-        args.monthly,
-        rows,
-        usmpd_appended + usmpd_refreshed + schedule_appended + schedule_refreshed,
-        dry_run=False,
+    monthly_count, monthly_first, monthly_last = update_monthly_panel(
+        args.monthly, rows, dry_run=False
     )
-    if monthly_appended:
+    if monthly_count:
         print(
-            f"Appended {len(monthly_appended)} row(s) to {args.monthly.name}: "
-            f"{', '.join(monthly_appended)}"
-        )
-    if monthly_refreshed:
-        print(
-            f"Refreshed {len(monthly_refreshed)} row(s) in {args.monthly.name}: "
-            f"{', '.join(monthly_refreshed)}"
+            f"Rebuilt {monthly_count} pipeline row(s) in {args.monthly.name} "
+            f"({monthly_first} .. {monthly_last})"
         )
 
     return 0
